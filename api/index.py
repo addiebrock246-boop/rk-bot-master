@@ -1,13 +1,15 @@
-import os, json, requests as req, asyncio
+import os, json, requests as req, asyncio, io
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
+import vercel_blob
 
 # ========== TERI DETAILS (ALREADY SET) ==========
 BOT_TOKEN = "8510609111:AAGX3O_sbuIZOhV45ziYoM-HzlScxNSEl84"
-OWNER_ID = 5964851833                               # tera Telegram User ID
+OWNER_ID = 5964851833
 UPSTASH_URL = "https://welcomed-flounder-86019.upstash.io"
 UPSTASH_TOKEN = "gQAAAAAAAVADAAIgcDE3ZmI1NTk4N2VmMTM0ZTExOWJiNDk5NTNmNjRkMWM1Yg"
+BLOB_TOKEN = os.environ.get("BLOB_READ_WRITE_TOKEN", "")  # Vercel Blob ka token
 
 # ---------- KV Helpers ----------
 def kv_get(key):
@@ -34,11 +36,56 @@ def kv_delete(key):
         return
     url = f"{UPSTASH_URL}/del/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    req.get(url, headers=headers, timeout=5)  # ignore errors
+    req.get(url, headers=headers, timeout=5)
+
+# ---------- Photo Upload to Vercel Blob ----------
+def upload_photo_to_blob(file_data, filename):
+    """Upload image bytes to Vercel Blob and return public URL."""
+    # Ensure BLOB token is set via environment variable
+    resp = vercel_blob.put(filename, file_data)
+    return resp['url']
 
 # ---------- DM HANDLER ----------
 DM_PASSWORD = "RISHAVBHAGWANHAI"
 authenticated_users = set()
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photo messages during setup."""
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user or update.effective_chat.type != "private":
+        return
+    if user.id != OWNER_ID:
+        await msg.reply_text("You are not authorized.")
+        return
+
+    # Check if we are in setup flow
+    state_key = f"setup_state:{user.id}"
+    state_json = kv_get(state_key)
+    if not state_json:
+        await msg.reply_text("No active setup session. Use /setup first.")
+        return
+    state = json.loads(state_json)
+
+    # Only handle photo if waiting for photo_url step
+    if state.get("step") != "photo_url":
+        await msg.reply_text("I'm not expecting a photo right now. Send text or /cancel.")
+        return
+
+    # Download photo from Telegram
+    try:
+        file = await msg.photo[-1].get_file()
+        # Download file bytes
+        file_bytes = await file.download_as_bytearray()
+        # Upload to Vercel Blob
+        photo_url = upload_photo_to_blob(bytes(file_bytes), f"photo_{user.id}_{file.file_id}.jpg")
+        # Store URL in state
+        state["data"]["photo_url"] = photo_url
+        state["step"] = "caption"
+        kv_set(state_key, json.dumps(state))
+        await msg.reply_text(f"✅ Photo uploaded! Now send caption text (use \\n for new lines):")
+    except Exception as e:
+        await msg.reply_text(f"❌ Failed to upload photo: {str(e)}")
 
 async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -49,7 +96,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("You are not authorized.")
         return
 
-    text = msg.text.strip()
+    text = msg.text.strip() if msg.text else ""
 
     # /debug command
     if text == "/debug":
@@ -101,7 +148,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         token = parts[1]
         state = {"step": "photo_url", "token": token, "data": {}}
         kv_set(state_key, json.dumps(state))
-        await msg.reply_text("Send photo URL (or type 'none' to skip):")
+        await msg.reply_text("📸 Send a photo (or type 'none' to skip, or type a URL):")
         return
 
     # Cancel during setup
@@ -116,10 +163,18 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         token = state["token"]
 
         if step == "photo_url":
-            data["photo_url"] = text if text.lower() != "none" else ""
-            state["step"] = "caption"
-            kv_set(state_key, json.dumps(state))
-            await msg.reply_text("Send caption text (use \\n for new lines):")
+            # Already handled by photo handler above; if text is sent, treat as URL or 'none'
+            if text.lower() == "none":
+                data["photo_url"] = ""
+                state["step"] = "caption"
+                kv_set(state_key, json.dumps(state))
+                await msg.reply_text("No photo will be used. Send caption text (use \\n for new lines):")
+            else:
+                # Assume it's a URL
+                data["photo_url"] = text
+                state["step"] = "caption"
+                kv_set(state_key, json.dumps(state))
+                await msg.reply_text("Send caption text (use \\n for new lines):")
         elif step == "caption":
             data["caption"] = text.replace("\\n", "\n")
             state["step"] = "second_message"
@@ -140,7 +195,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Save final config
             config_key = f"config:{token}"
             kv_set(config_key, json.dumps(data))
-            kv_delete(state_key)  # clear state
+            kv_delete(state_key)
             await msg.reply_text("✅ Game bot configuration saved! Users will now see the updated /start.")
         return
 
@@ -161,6 +216,7 @@ def webhook():
     try:
         data = request.get_json()
         application = Application.builder().token(BOT_TOKEN).build()
+        application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, handle_photo))
         application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, dm_handler))
         loop.run_until_complete(application.initialize())
         update = Update.de_json(data, application.bot)
