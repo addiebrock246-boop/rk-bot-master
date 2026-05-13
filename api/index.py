@@ -4,7 +4,7 @@ from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import vercel_blob
 
-# ========== TERI DETAILS ==========
+# ========== TERI DETAILS (ALREADY SET) ==========
 BOT_TOKEN = "8510609111:AAGX3O_sbuIZOhV45ziYoM-HzlScxNSEl84"
 OWNER_ID = 5964851833
 UPSTASH_URL = "https://welcomed-flounder-86019.upstash.io"
@@ -42,7 +42,8 @@ def kv_delete(key):
 # ---------- Photo Upload to Vercel Blob ----------
 def upload_photo_to_blob(file_data, filename):
     """Upload image bytes to Vercel Blob and return public URL."""
-    resp = vercel_blob.put(filename, file_data)
+    # add_random_suffix ensures unique filename every time
+    resp = vercel_blob.put(filename, file_data, add_random_suffix=True)
     return resp['url']
 
 # ---------- DM HANDLER ----------
