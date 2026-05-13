@@ -4,12 +4,13 @@ from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import vercel_blob
 
-# ========== TERI DETAILS (ALREADY SET) ==========
+# ========== TERI DETAILS ==========
 BOT_TOKEN = "8510609111:AAGX3O_sbuIZOhV45ziYoM-HzlScxNSEl84"
 OWNER_ID = 5964851833
 UPSTASH_URL = "https://welcomed-flounder-86019.upstash.io"
 UPSTASH_TOKEN = "gQAAAAAAAVADAAIgcDE3ZmI1NTk4N2VmMTM0ZTExOWJiNDk5NTNmNjRkMWM1Yg"
-BLOB_TOKEN = os.environ.get("BLOB_READ_WRITE_TOKEN", "")  # Vercel Blob ka token
+BLOB_TOKEN = os.environ.get("BLOB_READ_WRITE_TOKEN", "")
+GAME_RUNNER_URL = "https://rk-game-runner.vercel.app"   # 👈 apna runner project ka URL
 
 # ---------- KV Helpers ----------
 def kv_get(key):
@@ -41,7 +42,6 @@ def kv_delete(key):
 # ---------- Photo Upload to Vercel Blob ----------
 def upload_photo_to_blob(file_data, filename):
     """Upload image bytes to Vercel Blob and return public URL."""
-    # Ensure BLOB token is set via environment variable
     resp = vercel_blob.put(filename, file_data)
     return resp['url']
 
@@ -59,7 +59,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("You are not authorized.")
         return
 
-    # Check if we are in setup flow
     state_key = f"setup_state:{user.id}"
     state_json = kv_get(state_key)
     if not state_json:
@@ -67,19 +66,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     state = json.loads(state_json)
 
-    # Only handle photo if waiting for photo_url step
     if state.get("step") != "photo_url":
         await msg.reply_text("I'm not expecting a photo right now. Send text or /cancel.")
         return
 
-    # Download photo from Telegram
     try:
         file = await msg.photo[-1].get_file()
-        # Download file bytes
         file_bytes = await file.download_as_bytearray()
-        # Upload to Vercel Blob
         photo_url = upload_photo_to_blob(bytes(file_bytes), f"photo_{user.id}_{file.file_id}.jpg")
-        # Store URL in state
         state["data"]["photo_url"] = photo_url
         state["step"] = "caption"
         kv_set(state_key, json.dumps(state))
@@ -151,7 +145,6 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("📸 Send a photo (or type 'none' to skip, or type a URL):")
         return
 
-    # Cancel during setup
     if text == "/cancel" and state:
         kv_delete(state_key)
         await msg.reply_text("🚫 Setup cancelled.")
@@ -163,14 +156,12 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         token = state["token"]
 
         if step == "photo_url":
-            # Already handled by photo handler above; if text is sent, treat as URL or 'none'
             if text.lower() == "none":
                 data["photo_url"] = ""
                 state["step"] = "caption"
                 kv_set(state_key, json.dumps(state))
                 await msg.reply_text("No photo will be used. Send caption text (use \\n for new lines):")
             else:
-                # Assume it's a URL
                 data["photo_url"] = text
                 state["step"] = "caption"
                 kv_set(state_key, json.dumps(state))
@@ -192,14 +183,19 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("Send game URL (e.g., https://cryptomines.vercel.app):")
         elif step == "button_url":
             data["button_url"] = text
-            # Save final config
+            # Save config
             config_key = f"config:{token}"
             kv_set(config_key, json.dumps(data))
             kv_delete(state_key)
-            await msg.reply_text("✅ Game bot configuration saved! Users will now see the updated /start.")
+            # ✅ Auto-set webhook to runner
+            webhook_url = f"{GAME_RUNNER_URL}/api/{token}"
+            set_resp = req.get(f"https://api.telegram.org/bot{token}/setWebhook?url={webhook_url}")
+            if set_resp.status_code == 200 and set_resp.json().get("ok"):
+                await msg.reply_text("✅ Game bot configured and webhook set! Users will see updated /start.")
+            else:
+                await msg.reply_text(f"✅ Config saved but webhook failed: {set_resp.text}. Manually set: {webhook_url}")
         return
 
-    # /list_bots (placeholder)
     if text == "/list_bots":
         await msg.reply_text("Feature coming soon — will list all configured game bots.")
         return
