@@ -1,4 +1,4 @@
-import os, json, requests as req, asyncio, io, time
+import os, json, requests as req, asyncio, time
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
@@ -9,7 +9,6 @@ BOT_TOKEN = "8510609111:AAGX3O_sbuIZOhV45ziYoM-HzlScxNSEl84"
 OWNER_ID = 5964851833
 UPSTASH_URL = "https://welcomed-flounder-86019.upstash.io"
 UPSTASH_TOKEN = "gQAAAAAAAVADAAIgcDE3ZmI1NTk4N2VmMTM0ZTExOWJiNDk5NTNmNjRkMWM1Yg"
-BLOB_TOKEN = os.environ.get("BLOB_READ_WRITE_TOKEN", "")
 GAME_RUNNER_URL = "https://rk-game-runner.vercel.app"   # 👈 apna runner project ka URL
 
 # ---------- KV Helpers ----------
@@ -42,8 +41,8 @@ def kv_delete(key):
 # ---------- Photo Upload to Vercel Blob ----------
 def upload_photo_to_blob(file_data, filename):
     """Upload image bytes to Vercel Blob and return public URL."""
-    # Unique filename avoid karega overwrite error
-    unique_name = f"{filename}_{int(time.time())}"
+    # Unique filename to avoid overwrite error
+    unique_name = f"{int(time.time())}_{filename}"
     resp = vercel_blob.put(unique_name, file_data)
     return resp['url']
 
